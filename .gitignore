@@ -1,0 +1,33 @@
+# ESP-IDF
+firmware/build/
+firmware/build-test/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/main/secrets.h
+
+# KiCad
+hardware/*-backups/
+hardware/.history/
+hardware/*.kicad_prl
+hardware/*.kicad_pcb-bak
+hardware/*.kicad_sch-bak
+hardware/_autosave-*
+hardware/fp-info-cache
+hardware/*.dsn
+hardware/*.ses
+hardware/*.net
+hardware/drc.rpt
+hardware/fr/
+
+# FreeCAD
+enclosure/**/*.FCBak
+enclosure/**/*.FCStd1
+
+# Python / editors
+__pycache__/
+*.pyc
+.cache/
+.vscode/
+.idea/
+*.swp
