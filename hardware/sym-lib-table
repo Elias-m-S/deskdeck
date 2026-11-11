@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "deskdeck")(type "KiCad")(uri "${KIPRJMOD}/deskdeck.kicad_sym")(options "")(descr "Project symbols: ESP32-S3 SuperMini"))
+)

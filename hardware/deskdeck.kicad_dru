@@ -1,0 +1,5 @@
+(version 1)
+# Galvanic isolation: desk nets (DESK_*) keep their distance from everything on the ESP side
+(rule "Desk-ESP isolation"
+  (condition "(A.NetName == 'DESK_DN' || A.NetName == 'DESK_UP' || A.NetName == 'DESK_VCC') && !(B.NetName == 'DESK_DN' || B.NetName == 'DESK_UP' || B.NetName == 'DESK_VCC') && B.NetName != ''")
+  (constraint clearance (min 0.8mm)))
