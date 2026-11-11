@@ -62,11 +62,7 @@ LEGENDS = {
 def mesh_to_solid(mesh):
     s = Part.Shape()
     s.makeShapeFromMesh(mesh.Topology, 0.01)
-    solid = Part.makeSolid(Part.makeShell(s.Faces))
-    try:
-        return solid.removeSplitter()
-    except Part.OCCError:
-        return solid  # very fine meshes (the written 3MF files) sometimes refuse; the raw solid slices fine
+    return Part.makeSolid(Part.makeShell(s.Faces)).removeSplitter()
 
 
 def cap():
@@ -320,21 +316,89 @@ def write_3mf(path, parts):
         z.writestr('Metadata/model_settings.config', cfg)
 
 
-def read_3mf(path):
-    """Reads a cap written by write_3mf back: (cap, legend) as upright solids (top face at z = height)."""
-    import Mesh
+def read_3mf_meshes(path):
+    """Reads a cap written by write_3mf back as raw meshes: [(points, triangles)] for cap and legend,
+    turned upright (top face at z = height) like the shapes in preview()."""
     with zipfile.ZipFile(path) as z:
         s = z.read('3D/3dmodel.model').decode()
-    shapes = []
+    meshes = []
     for m in re.finditer(r'<object id="\d+" type="model" pid="1" pindex="(\d+)"><mesh>(.*?)</mesh>', s, re.S):
         pts = [tuple(map(float, t)) for t in re.findall(r'<vertex x="([^"]+)" y="([^"]+)" z="([^"]+)"', m.group(2))]
         tris = [tuple(map(int, t)) for t in re.findall(r'<triangle v1="(\d+)" v2="(\d+)" v3="(\d+)"', m.group(2))]
-        mm = Mesh.Mesh()
-        mm.addFacets([(pts[a], pts[b], pts[c]) for a, b, c in tris])
-        shapes.append(mesh_to_solid(mm))
-    cap_s, legend_s = shapes
-    height = cap_s.BoundBox.ZMax
-    return print_orientation(cap_s, height), print_orientation(legend_s, height)   # the transform is its own inverse
+        meshes.append((pts, tris))
+    height = max(p[2] for p in meshes[0][0])
+    # print orientation is rotated 180 deg about x and lifted by height; the inverse is the same transform
+    return [([(x, -y, height - z) for x, y, z in pts], tris) for pts, tris in meshes], height
+
+
+def preview_from_meshes(results, path, width, height):
+    """Same picture as preview(), drawn from triangles (robust against mesh-to-solid problems)."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.collections import PolyCollection
+
+    def tris_xy(mesh, keep=lambda tri: True):
+        pts, tris = mesh
+        return [[pts[i][:2] for i in t] for t in tris if keep([pts[i] for i in t])]
+
+    def section_xz(mesh):
+        """Polygons of the cut y = 0 through a closed mesh, as (x, z) loops."""
+        pts, tris = mesh
+        segs = []
+        for t in tris:
+            p = [pts[i] for i in t]
+            cut = []
+            for a, b in ((p[0], p[1]), (p[1], p[2]), (p[2], p[0])):
+                if (a[1] < 0) != (b[1] < 0):
+                    f = a[1] / (a[1] - b[1])
+                    cut.append((round(a[0] + f * (b[0] - a[0]), 4), round(a[2] + f * (b[2] - a[2]), 4)))
+            if len(cut) == 2 and cut[0] != cut[1]:
+                segs.append(cut)
+        nxt = {}
+        for a, b in segs:
+            nxt.setdefault(a, []).append(b)
+            nxt.setdefault(b, []).append(a)
+        loops, used = [], set()
+        for start in nxt:
+            if start in used:
+                continue
+            loop, cur, prev = [start], start, None
+            used.add(start)
+            while True:
+                cand = [q for q in nxt[cur] if q != prev and q not in used]
+                if not cand:
+                    break
+                prev, cur = cur, cand[0]
+                used.add(cur)
+                loop.append(cur)
+            if len(loop) > 2:
+                loops.append(loop)
+        return loops
+
+    n = len(results)
+    fig, axs = plt.subplots(2, n, figsize=(2.6 * n, 5.6), gridspec_kw={'height_ratios': [1, 0.7]})
+    for i, (name, (cap_m, leg_m)) in enumerate(results.items()):
+        ax = axs[0][i]
+        top = height - 0.05
+        ax.add_collection(PolyCollection(tris_xy(cap_m), fc='#555', ec='#555', lw=0.3))             # skirt silhouette
+        ax.add_collection(PolyCollection(tris_xy(cap_m, lambda p: min(q[2] for q in p) > top), fc='#222', ec='#222', lw=0.3))
+        ax.add_collection(PolyCollection(tris_xy(leg_m), fc='#f4f4f0', ec='#f4f4f0', lw=0.3))
+        ax.set_xlim(-width / 2 - 0.5, width / 2 + 0.5)
+        ax.set_ylim(-width / 2 - 0.5, width / 2 + 0.5)
+        ax.set_aspect(1)
+        ax.set_title(name)
+        ax.axis('off')
+        ax = axs[1][i]
+        ax.add_collection(PolyCollection(section_xz(cap_m), fc='#555', ec='none'))
+        ax.add_collection(PolyCollection(section_xz(leg_m), fc='#f4f4f0', ec='#999', lw=0.3))
+        ax.set_xlim(-width / 2 - 0.5, width / 2 + 0.5)
+        ax.set_ylim(-0.5, height + 0.5)
+        ax.set_aspect(1)
+        ax.set_title('section', fontsize=8)
+        ax.tick_params(labelsize=6)
+    fig.tight_layout()
+    fig.savefig(path, dpi=110, facecolor='white')
 
 
 def print_orientation(s, height):
@@ -396,12 +460,13 @@ def preview(results, path, width, height):
 
 
 def main_preview():
-    results = {}
+    results, height = {}, 0.0
     for name in LEGENDS:
-        results[name] = read_3mf(os.path.join(OUTPUT, f'{name}.3mf'))
-    k = next(iter(results.values()))[0]
-    bb = k.BoundBox
-    preview(results, PREVIEW, bb.XLength, bb.ZMax)
+        (cap_m, leg_m), height = read_3mf_meshes(os.path.join(OUTPUT, f'{name}.3mf'))
+        results[name] = (cap_m, leg_m)
+    pts = next(iter(results.values()))[0][0]
+    width = max(p[0] for p in pts) - min(p[0] for p in pts)
+    preview_from_meshes(results, PREVIEW, width, height)
     print(f'preview written: {PREVIEW}')
 
 
