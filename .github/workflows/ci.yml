@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  firmware:
+    name: Firmware (ESP-IDF)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provide a secrets.h (Wi-Fi disabled)
+        run: cp firmware/main/secrets.h.example firmware/main/secrets.h
+      - name: Build
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v6.0.3
+          target: esp32s3
+          path: firmware
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: deskdeck-firmware
+          path: |
+            firmware/build/deskdeck.bin
+            firmware/build/bootloader/bootloader.bin
+            firmware/build/partition_table/partition-table.bin
+            firmware/build/flash_args
+
+  desk-logic:
+    name: Desk logic simulation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run the simulated desk against desk_logic.c
+        run: make -C firmware/test
+
+  python:
+    name: Host daemon and generators
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff pyserial
+      - name: Lint (syntax, undefined names, unused imports)
+        run: ruff check --select E9,F63,F7,F82,F401 host hardware/generator enclosure
+      - name: Daemon starts and shows its help
+        run: python host/deskdeck_daemon.py --help
