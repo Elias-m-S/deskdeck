@@ -175,7 +175,8 @@ class Targets:
 # --------------------------------------------------------------------------- device
 
 def find_port():
-    hits = sorted(glob.glob("/dev/serial/by-id/*DeskDeck*"))
+    # The USB product string is "DeskDeck"; boards still running the pre-rename firmware show up as "Stream Deck".
+    hits = sorted(glob.glob("/dev/serial/by-id/*DeskDeck*")) or sorted(glob.glob("/dev/serial/by-id/*Stream_Deck*"))
     return hits[0] if hits else None
 
 
