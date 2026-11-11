@@ -7,7 +7,7 @@
 # No BOOT/RST needed as long as a firmware that understands @BOOTLOADER is running.
 # Alternative on the device: long-press the encoder -> Einstellungen -> "Firmware flashen".
 #
-# ESP-IDF: either have idf.py in PATH (export.sh sourced) or set IDF_PATH / IDF_EXPORT_SH.
+# ESP-IDF: idf.py in PATH, or IDF_PATH / IDF_EXPORT_SH, or one of the usual install locations (see below).
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
@@ -27,9 +27,14 @@ wait_port() { # wait_port <glob> <seconds>
 }
 
 if ! command -v idf.py >/dev/null; then
-    export_sh="${IDF_EXPORT_SH:-${IDF_PATH:-$HOME/esp/esp-idf}/export.sh}"
-    if [[ ! -f $export_sh ]]; then
-        echo "!! idf.py not found and no ESP-IDF at $export_sh (set IDF_PATH or IDF_EXPORT_SH)." >&2
+    export_sh=""
+    for candidate in "${IDF_EXPORT_SH:-}" "${IDF_PATH:+$IDF_PATH/export.sh}" \
+                     "$HOME/esp/esp-idf/export.sh" "$HOME/Dev/Tools/ESP-IDF/esp-idf/export.sh" \
+                     "$HOME/esp-idf/export.sh" /opt/esp-idf/export.sh; do
+        [[ -n $candidate && -f $candidate ]] && { export_sh=$candidate; break; }
+    done
+    if [[ -z $export_sh ]]; then
+        echo "!! idf.py not found. Source ESP-IDF's export.sh first, or set IDF_PATH / IDF_EXPORT_SH." >&2
         exit 1
     fi
     # shellcheck disable=SC1090
