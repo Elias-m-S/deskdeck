@@ -6,12 +6,15 @@
  *              short press other enc -> toggle mute
  *              MX key                -> shortcut via USB HID
  *
- *   MAIN MENU: Sound (= back to volume) / Tisch (desk) / Einstellungen (settings)
+ *   MAIN MENU: Sound (= back to volume) / Tisch (desk) / Anzeige (home screen) / Einstellungen
  *              turn = select, short = open, long = one level back, 10 s idle = home
  *              clockwise = selection moves down
  *
  *   SETTINGS:  Regler 1/2: choose app / HA status / Firmware flashen (bootloader) / Zurück
  *   APP MENU:  turn = select, short = apply (NVS), long = back
+ *   SCREEN:    home screen Lautstärke (volume) / Uhr (clock) / Aus (panel off), stored in NVS.
+ *              With Uhr/Aus any input shows the volume screen for SCREEN_WAKE_MS; HA toasts
+ *              still appear.
  *
  *   DESK MENU: show height / move to sit/stand / up/down (manual) /
  *              sit/stand = now / calibrate height / back
@@ -28,6 +31,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <time.h>
 
 #include "bootloader.h"
 #include "config.h"
@@ -57,10 +61,15 @@ static const encoder_binding_t s_encs[] = ENCODERS;
 typedef enum { MODE_NORMAL, MODE_MENU, MODE_APP_MENU, MODE_DESK, MODE_DESK_CAL } ui_mode_t;
 
 /* List menus; only one is open at a time, so they share s.items/s.sel. */
-typedef enum { MENU_MAIN, MENU_SETTINGS, MENU_DESK } menu_id_t;
+typedef enum { MENU_MAIN, MENU_SETTINGS, MENU_DESK, MENU_SCREEN } menu_id_t;
+
+/* What the home screen shows (persisted) */
+typedef enum { SCREEN_VOLUME, SCREEN_CLOCK, SCREEN_OFF, SCREEN_COUNT } screen_t;
+static const char *const SCREEN_NAMES[SCREEN_COUNT] = {"Lautstärke", "Uhr", "Aus"};
 
 typedef enum {
-    ITEM_SOUND, ITEM_DESK_MENU, ITEM_SETTINGS, // main menu (index in menu = value)
+    ITEM_SOUND, ITEM_DESK_MENU, ITEM_SCREEN_MENU, ITEM_SETTINGS, // main menu (index in menu = value)
+    ITEM_SCREEN, // home screen choice
     ITEM_APP_SLOT, ITEM_HA_INFO, ITEM_BOOTLOADER, // settings
     ITEM_DESK_VIEW, ITEM_DESK_GOTO, ITEM_DESK_MANUAL, ITEM_DESK_SAVE, ITEM_DESK_CAL, // desk
     ITEM_BACK,
@@ -83,6 +92,11 @@ static struct {
 
     ui_mode_t mode;
     TickType_t menu_since;
+
+    screen_t screen;
+    TickType_t wake_until;     // Uhr/Aus: show the volume screen until then
+    int clock_shown;           // minute of the day last drawn (-1 = none)
+    bool panel_off;
 
     menu_id_t menu;
     menu_item_t items[MENU_ITEMS_MAX];
@@ -192,6 +206,57 @@ static void slot_save(size_t i)
     nvs_close(h);
 }
 
+static void screen_load(void)
+{
+    nvs_handle_t h;
+    uint8_t v = SCREEN_VOLUME;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "screen", &v);
+        nvs_close(h);
+    }
+    s.screen = v < SCREEN_COUNT ? (screen_t)v : SCREEN_VOLUME;
+}
+
+static void screen_save(void)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) {
+        return;
+    }
+    nvs_set_u8(h, "screen", (uint8_t)s.screen);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+/* ---------------- Home screen ---------------- */
+
+static bool waking(void)
+{
+    return (int32_t)(s.wake_until - xTaskGetTickCount()) > 0;
+}
+
+static bool toast_active(void)
+{
+    return (int32_t)(s.toast_until - xTaskGetTickCount()) > 0;
+}
+
+/* The screen the home view currently shows: the chosen one, or volume while woken up */
+static screen_t home_screen(void)
+{
+    return waking() ? SCREEN_VOLUME : s.screen;
+}
+
+/* Local time, false until SNTP has synced once */
+static bool clock_now(struct tm *tm)
+{
+    const time_t now = time(NULL);
+    if (now < 1700000000) { // before 2023 = never synced
+        return false;
+    }
+    localtime_r(&now, tm);
+    return true;
+}
+
 /* ---------------- Volume ---------------- */
 
 static void fallback_media(uint16_t usage, int times)
@@ -254,7 +319,16 @@ static void menu_open(menu_id_t id, int sel)
     case MENU_MAIN:
         add_item(ITEM_SOUND, 0, '\x0e', "Sound");
         add_item(ITEM_DESK_MENU, 0, '\x12', "Tisch");
+        strlcpy(add_item(ITEM_SCREEN_MENU, 0, '\x09', "Anzeige")->value, SCREEN_NAMES[s.screen],
+                sizeof s.items[0].value);
         add_item(ITEM_SETTINGS, 0, '\x0f', "Einstellungen");
+        break;
+
+    case MENU_SCREEN:
+        for (int i = 0; i < SCREEN_COUNT; i++) {
+            add_item(ITEM_SCREEN, (uint8_t)i, i == (int)s.screen ? '\xfb' : ' ', SCREEN_NAMES[i]); // 0xFB = check mark
+        }
+        add_item(ITEM_BACK, 0, '\x11', "Zurück");
         break;
 
     case MENU_SETTINGS:
@@ -298,6 +372,7 @@ static void menu_back(void)
     switch (s.menu) {
     case MENU_SETTINGS: menu_open(MENU_MAIN, ITEM_SETTINGS); break;
     case MENU_DESK: menu_open(MENU_MAIN, ITEM_DESK_MENU); break;
+    case MENU_SCREEN: menu_open(MENU_MAIN, ITEM_SCREEN_MENU); break;
     default: set_mode(MODE_NORMAL); break;
     }
 }
@@ -353,6 +428,16 @@ static void menu_select(void)
         break;
     case ITEM_DESK_MENU:
         menu_open(MENU_DESK, 0);
+        break;
+    case ITEM_SCREEN_MENU:
+        menu_open(MENU_SCREEN, s.screen);
+        break;
+    case ITEM_SCREEN:
+        s.screen = (screen_t)it->arg;
+        screen_save();
+        s.wake_until = xTaskGetTickCount(); // show the choice right away
+        set_mode(MODE_NORMAL);
+        toast(SCREEN_NAMES[s.screen]);
         break;
     case ITEM_SETTINGS:
         menu_open(MENU_SETTINGS, 0);
@@ -498,6 +583,10 @@ static void handle(const event_t *ev)
         return;
     }
 
+    // Uhr/Aus: show the volume screen for a moment; the input itself still acts normally
+    s.wake_until = xTaskGetTickCount() + pdMS_TO_TICKS(SCREEN_WAKE_MS);
+    s.dirty = true;
+
     switch (ev->type) {
     case EV_KEY:
         if (s_keys[ev->index].action.type == ACTION_DESK) {
@@ -545,7 +634,7 @@ static void draw_title(const char *title)
 
 static void draw_status_line(void)
 {
-    if ((int32_t)(s.toast_until - xTaskGetTickCount()) > 0) {
+    if (toast_active()) {
         display_fill_rect(0, 0, DISP_W, 9, true);
         display_text((DISP_W - display_text_width(s.toast, 1)) / 2, 1, s.toast, 1, true);
         return;
@@ -593,6 +682,45 @@ static void draw_normal(void)
     draw_status_line();
     for (size_t i = 0; i < ENC_COUNT && i < 2; i++) {
         draw_slot(i, 15 + (int)i * 25);
+    }
+}
+
+/* Big HH:MM, moved by a few pixels every minute against OLED burn-in */
+static void draw_clock(void)
+{
+    if (toast_active()) { // only toasts, no connection warnings: this screen shows just the time
+        draw_status_line();
+    }
+    struct tm tm;
+    char t[8] = "--:--";
+    const bool ok = clock_now(&tm);
+    if (ok) {
+        snprintf(t, sizeof t, "%02d:%02d", tm.tm_hour, tm.tm_min);
+    }
+    const int scale = 4, w = display_text_width(t, scale), h = 7 * scale;
+    const int shift = ok ? tm.tm_min % 5 - 2 : 0; // -2..+2
+    display_text((DISP_W - w) / 2 + shift, (DISP_H - h) / 2 + 2 + shift, t, scale, false);
+    if (!ok) {
+        const char *hint = "keine Zeit (WLAN?)";
+        display_text((DISP_W - display_text_width(hint, 1)) / 2, 55, hint, 1, false);
+    }
+    s.clock_shown = ok ? tm.tm_hour * 60 + tm.tm_min : -1;
+}
+
+/* Panel off; an HA or key toast still lights it up briefly */
+static void draw_off(void)
+{
+    if (toast_active()) {
+        draw_status_line();
+    }
+}
+
+static void draw_home(void)
+{
+    switch (home_screen()) {
+    case SCREEN_CLOCK: draw_clock(); break;
+    case SCREEN_OFF: draw_off(); break;
+    default: draw_normal(); break;
     }
 }
 
@@ -666,7 +794,8 @@ static row_t app_row(size_t i)
 
 static void draw_menu(void)
 {
-    static const char *const titles[] = {[MENU_MAIN] = "Menü", [MENU_SETTINGS] = "Einstellungen", [MENU_DESK] = "Tisch"};
+    static const char *const titles[] = {
+        [MENU_MAIN] = "Menü", [MENU_SETTINGS] = "Einstellungen", [MENU_DESK] = "Tisch", [MENU_SCREEN] = "Anzeige"};
     draw_list(titles[s.menu], item_row, s.count, s.sel);
 }
 
@@ -749,7 +878,7 @@ static void render(void)
 {
     display_clear();
     switch (s.mode) {
-    case MODE_NORMAL: draw_normal(); break;
+    case MODE_NORMAL: draw_home(); break;
     case MODE_MENU: draw_menu(); break;
     case MODE_APP_MENU: draw_app_menu(); break;
     case MODE_DESK: draw_desk(); break;
@@ -757,6 +886,12 @@ static void render(void)
     }
     display_flush();
     s.dirty = false;
+
+    const bool off = s.mode == MODE_NORMAL && home_screen() == SCREEN_OFF && !toast_active();
+    if (off != s.panel_off) {
+        display_power(!off);
+        s.panel_off = off;
+    }
 }
 
 /* ---------------- Task ---------------- */
@@ -766,6 +901,7 @@ static void ui_task(void *arg)
     (void)arg;
     bool toast_visible = false;
     bool usb_was_mounted = false;
+    screen_t home_was = s.screen;
     TickType_t last_status = 0;
 
     for (;;) {
@@ -814,6 +950,20 @@ static void ui_task(void *arg)
         s.host_was_connected = host_now;
         usb_was_mounted = usb_now;
 
+        // Home screen: wake-up ran out, or the clock shows a new minute
+        const screen_t home_now = home_screen();
+        if (home_now != home_was) {
+            s.dirty = true;
+        }
+        home_was = home_now;
+        if (s.mode == MODE_NORMAL && home_now == SCREEN_CLOCK) {
+            struct tm tm;
+            const int minute = clock_now(&tm) ? tm.tm_hour * 60 + tm.tm_min : -1;
+            if (minute != s.clock_shown) {
+                s.dirty = true;
+            }
+        }
+
         if (s.dirty) {
             render();
         }
@@ -846,6 +996,8 @@ void ui_init(void)
     s_queue = xQueueCreate(32, sizeof(event_t));
     configASSERT(s_queue);
     slots_load();
+    screen_load();
+    s.clock_shown = -1;
     s.dirty = true;
     xTaskCreate(ui_task, "ui", 4096, NULL, 4, NULL);
     ESP_LOGI(TAG, "encoder 1: %s, encoder 2: %s", s.slot[0], ENC_COUNT > 1 ? s.slot[1] : "-");

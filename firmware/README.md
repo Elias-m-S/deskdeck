@@ -26,7 +26,9 @@ idf.py build
 | MX key 3 | Desk: sit <-> stand (moves to the other profile) | Cancel |
 | MX key 4 | Home Assistant: next light scene | Cancel |
 
-**Main menu:** *Sound* (back to the volume screen), *Tisch* (desk), *Einstellungen* (settings). Lists wrap around. Under *Einstellungen* you assign the application of each encoder, see the HA connection status and can reboot into the bootloader. Menus close after 10 s without input.
+**Main menu:** *Sound* (back to the volume screen), *Tisch* (desk), *Anzeige* (home screen), *Einstellungen* (settings). Lists wrap around. Under *Einstellungen* you assign the application of each encoder, see the HA connection status and can reboot into the bootloader. Menus close after 10 s without input.
+
+**Home screen** (*Anzeige*): *Lautstärke* (volume bars), *Uhr* (just the time) or *Aus* (panel off). The choice is stored in NVS. With *Uhr* or *Aus*, any key or encoder input still does its normal job and shows the volume screen for 4 s (`SCREEN_WAKE_MS`); toasts from HA still appear. The clock syncs via SNTP over the Wi-Fi from `secrets.h` (`CLOCK_TZ`, `CLOCK_NTP_SERVER` in `config.h`) and shows `--:--` until it has. It moves by a few pixels each minute against OLED burn-in.
 
 Encoder assignments are stored in NVS and survive restarts. Without the host daemon, an encoder set to the master target (`MASTER_TARGET_NAME`, "Gesamt") still works via the normal media keys.
 

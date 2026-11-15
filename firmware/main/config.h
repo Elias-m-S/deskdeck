@@ -29,6 +29,12 @@
 #define OLED_COL_OFFSET 2
 #define OLED_CONTRAST 0x80 // 0x00-0xFF
 
+/* Home screen "Uhr": time from SNTP (needs the Wi-Fi in secrets.h), POSIX TZ string */
+#define CLOCK_TZ "CET-1CEST,M3.5.0,M10.5.0/3" // Europe/Berlin
+#define CLOCK_NTP_SERVER "pool.ntp.org"
+/* Home screen "Uhr" or "Aus": any input shows the volume screen for this long */
+#define SCREEN_WAKE_MS 4000
+
 /* ---------- MX keys ----------
  * GNOME/Ubuntu: Super+<n> focuses or launches the n-th app in the dock.
  * A key can also drive the desk: DESK(0) = sit, DESK(1) = stand, e.g. { 7, DESK(0), "Sitzen" }.

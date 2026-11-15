@@ -1,13 +1,17 @@
 #include "ha_link.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
+#include "config.h"
 #include "desk.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_mac.h"
 #include "esp_netif.h"
+#include "esp_netif_sntp.h"
 #include "esp_wifi.h"
 #include "events.h"
 #include "freertos/FreeRTOS.h"
@@ -202,6 +206,12 @@ void ha_link_init(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     esp_netif_t *netif = esp_netif_create_default_wifi_sta();
     esp_netif_set_hostname(netif, "deskdeck");
+
+    // Clock for the "Uhr" home screen; SNTP syncs on its own once the network is up
+    setenv("TZ", CLOCK_TZ, 1);
+    tzset();
+    const esp_sntp_config_t sntp = ESP_NETIF_SNTP_DEFAULT_CONFIG(CLOCK_NTP_SERVER);
+    esp_netif_sntp_init(&sntp);
 
     const wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK(esp_wifi_init(&init));

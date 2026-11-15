@@ -117,6 +117,15 @@ const char *display_status(void)
     return s_status;
 }
 
+void display_power(bool on)
+{
+    if (!s_ok) {
+        return;
+    }
+    const uint8_t cmd = on ? 0xAF : 0xAE;
+    send_cmds(&cmd, 1);
+}
+
 void display_flush(void)
 {
     if (!s_ok) {

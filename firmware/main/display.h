@@ -11,6 +11,7 @@
 bool display_init(void); // false = no display found (the rest keeps running)
 void display_flush(void);
 const char *display_status(void); // plain text for diagnostic logs
+void display_power(bool on);       // panel off = dark, RAM and frame buffer are kept
 
 void display_clear(void);
 void display_pixel(int x, int y, bool on);
